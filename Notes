@@ -1,0 +1,67 @@
+2019-07-16 Weighing by Edit-Distance
+
+The question of whether and how to weigh the characters is
+a perennial one in cladistics. Currently, every unit is
+weigh the same, which could have its biases. But if every
+vunit weighs the same some nodes can be erected on apographies
+that appear, well, unimpressive. But on the other hand, it
+is not very clear how individual variants should be weighed
+without some sort of model.
+
+One idea is to weigh the characters based on edit distance.
+The more that the variant is involved (e.g., in added, removed,
+or substituted characters, i.e., the Levenshtein edit distance),
+the more it should weight. Its granularity need not be on at
+the character count but at the world level (or binned).
+
+I can add the edit-distance weights by hand, and I have done
+so, but it is hard to switch it on and off. Therefore, I devised
+a short notation |2 |3 etc. on the variant separator to express
+a switchable weight, controlled by the WEIGHED environment
+variable.
+
+2019-06-10 Annotating correctors
+
+Right now, I don't pass through low-level correctors into
+the prep output files, but this may be error prone in my
+not noticing correctors. The thought I have is that I should
+annotate such correctors in the .vr file, even if they don't
+make it to the .tx file.
+
+Implementation looks really hairy though: no real hook in
+vr{Verse,Readings}().
+
+2018-09-27 Implemented mandated selection of witnesses
+
+I chose to go with a command-line list of witnesses, which
+gets looked after processing everything and right before the
+standard suppressions. If there is nothing on the command-
+line, it behaves as before. If there is a list, it marks
+each witness (or macro) as mandated, and it suppresses all
+non-mandated witnesses.
+
+The nice thing is that I can control which MSS are in from
+the command line, using macros I define in the file. (I have
+a $A macro for those MSS close to the Ausgangstext, with $1,
+$2, $3, for each tier separately.
+
+I no longer see a use-case for special macro $$, nor the '+'
+command, nor the complement operation.
+
+Selecting a parallel, however, could be a viable extension.
+
+2018-09-27 Some ideas for prep:
+
+* Command-line control for the subset of MSS to be processed
+  and output. This is so that I can have a master collation
+  file and select portions for analysis.
+
+  A generalization of this idea is to take all the MSS on the
+  command-line and put them into a special macro, e.g. $$, for
+  use in the collation file. This would probably need a '+'
+  command for positively including a file, or a complement
+  macro command (=~ $~ $$ ;) and suppress the complement
+  (- $~ ;).
+
+  An extension of this is to select a (synoptic) parallel,
+  perhaps by prefixing a '/'.

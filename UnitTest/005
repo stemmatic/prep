@@ -1,0 +1,40 @@
+* a b c d ;
+
+^ Chron
+
+@ U005 " Shared lemma "
+
+[ Set up various inclusion possibilities
+| set/put | up/down ]
+" A " < 00 a
+" B " | 10 b
+" C " | 01 c
+" D " | 11 d
+>
+
+[ | ex(clusion ]
+< 0 a c | 1 b d >
+
+" Try with comment now "
+[ " more vunits " | various/several | eventual(ities ]
+< 00 b
+| 10 a
+| 01 d
+| 11 c
+>
+
+@ U005b " Try this other style "
+
+[ Ordinary lemma before | lemma/line ]
+< 0 b c d | 1 a >
+
+[ Set up various inclusion possibilities ]
+[ | set/put | up/down ]
+< 00 a | 10 b | 01 c | 11 d >
+
+[ " inclusion " | ex(clusion ]
+< 0 a c | 1 b d >
+
+[ " various ... possibilities " | various/several | eventual(ities ]
+< 00 b | 10 a | 01 d | 11 c >
+

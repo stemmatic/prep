@@ -1,0 +1,6 @@
+RCS
+UnitTest/foo
+UnitTest/RCS
+UnitTest/*.tx
+UnitTest/*.no
+UnitTest/*.vr

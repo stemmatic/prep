@@ -1,0 +1,11 @@
+* a b c d ;
+
+^ Chron
+
+@ U000 " No singular and no identical "
+
+[ Set up various inclusion possibilities
+| 0/0 | 0/1 | 1/0 | 0/2 | 2/0 | 1/2 | 2/2 ]
+< 0010212 a c
+| 0102022 b d
+>

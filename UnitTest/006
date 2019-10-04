@@ -1,0 +1,17 @@
+* a ;
+^ Chron
+
+@ 006.1
+
+" Suppress witness but include later hand "
+
+[ some text here | v1 | v2 | v3 ]
+< 000 a >
+
+=+ $? a ; 
+[ more text | v4 ]
+< 0 a:1 >
+=- $? a ;
+
+[ yet more text | v5 | v6 ]
+< 00 a >

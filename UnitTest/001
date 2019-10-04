@@ -1,0 +1,19 @@
+* a b c bc x y z ;
+^ Chron
+
+= $? ;
+
+@ Ustate001
+" Simple a -> [1] -> b, c test; expected answers are in bc. "
+
+" Two-state informative "
+[ U001
+| 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 ]
+< 01000111 a
+| 00101001 b
+| 00011010 c
+| 00001011 bc
+| 11111111 x
+| 11111111 y
+| 11111111 z
+>

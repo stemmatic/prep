@@ -1,0 +1,13 @@
+* a b c d ;
+
+^ Chron
+
+@ U004 " Gap characters "
+
+[ Set up various inclusion possibilities
+| 0 | 1 ]
+< 00 a
+| -0 b
+| 0- c
+| -- d
+>
