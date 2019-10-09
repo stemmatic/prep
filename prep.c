@@ -258,8 +258,13 @@ static int
 	findMSS(Context *ctx, char *name, int *hand)
 {
 	int ms, status;
-	char *colon;
+	char *dot, *colon;
+	dot = strchr(name, '.');
 	colon = strchr(name, ':');
+
+	// ECM data uses the dot as a witness separator, so chuck the trailing dot.
+	if (dot && dot[1] == EOS)
+		*dot = EOS;
 
 	*hand = 0;
 	if (*name == '-')

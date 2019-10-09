@@ -1,3 +1,5 @@
+*.o
+prep
 RCS
 UnitTest/foo
 UnitTest/RCS
