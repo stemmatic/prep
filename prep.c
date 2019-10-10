@@ -1153,7 +1153,10 @@ static Status
 	return OK;
 }
 
-// Syntax: = ${macro-name} {mss-name}+ ;
+// Syntax: =  ${macro-name} {mss-name}+ ;  " set macro "
+// Syntax: =+ ${macro-name} {mss-name}+ ;  " add to macro "
+// Syntax: =- ${macro-name} {mss-name}+ ;  " subtract from macro "
+// Syntax: =? ${macro-name} {mss-name}+ ;  " check macro "
 static Status
 	doDefine(Context *ctx)
 {
@@ -1161,13 +1164,15 @@ static Status
 	Macro *macro, *mac2;
 	int name;
 	int ms, hand;
-	int add=NO, sub=NO;
+	int add=NO, sub=NO, check=NO;
 	int nWarn = 0;
 
 	if (ctx->token[1] == '+')
 		add = YES;
 	if (ctx->token[1] == '-')
 		sub = YES;
+	if (ctx->token[1] == '?')
+	    check = YES;
 	token = getToken(ctx);
 	if (*token != '$') {
 		fWarn(ctx, "=", "Macro name must begin with $:", token);
@@ -1190,7 +1195,7 @@ static Status
 		ctx->par[ctx->parallel].pMacros[name] = macro;
 		for (ms = 0; ms < ctx->nMSS; ms++)
 			macro->inset[ms] = NO;
-	} else if (!add && !sub) {
+	} else if (!add && !sub && !check) {
 		for (ms = 0; ms < ctx->nMSS; ms++)
 			macro->inset[ms] = NO;
 	}
@@ -1213,6 +1218,13 @@ static Status
 				fWarn(ctx, "=", "No macros with correctors:", token);
 				continue;
 			}
+			if (check) {
+				if (!macro->inset[ms]) {
+					fWarn(ctx, "=", "Check failed for :", token);
+					nWarn++;
+				}
+				continue;
+			}
 			if (sub)
 				macro->inset[ms] = NO;
 			else
@@ -1221,13 +1233,20 @@ static Status
 		case '$':
 			mac2 = getMacro(ctx, token);
 			if (!mac2) {
-				fWarn(ctx, "<", "Unknown macro:", token);
+				fWarn(ctx, "=", "Unknown macro:", token);
 				nWarn++;
 				continue;
 			}
 			for (ms = 0; ms < ctx->nMSS; ms++) {
 				if (!mac2->inset[ms])
 					continue;
+				if (check) {
+					if (!macro->inset[ms]) {
+						fWarn(ctx, "=", "Check failed for :", token);
+						nWarn++;
+					}
+					continue;
+				}
 				if (sub)
 					macro->inset[ms] = NO;
 				else
