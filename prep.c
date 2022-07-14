@@ -15,9 +15,9 @@
 	Environmental controls:
 		YEARGRAN  - Granularity for years.  Default is (-1),
 					which is tuned for the N.T.
-		FTHRESH   - Threshold number of non-constant variants
+		FRAG      - Threshold number of non-constant variants
 					for including fragmentary witnesses.  (250)
-		CTHRESH   - Threshold number of new non-constant variants
+		CORR      - Threshold number of new non-constant variants
 					for including corrected witnesses.  (100)
 		YEAR      - Cut off year for witnesses.
 		NOSING    - No singular readings in matrix.
@@ -38,13 +38,19 @@
 
 /* Tokens:
 	*	- names of MSS
-	;	- list terminator for *, =, etc.
-	/	- switch parallel
+	^	- chronological file
 	"   - file comment
 	=	- define macro
-	^	- chronological file
+	=+	- add to macro
+	=-	- sub from macro
+	=?	- check macro
+	$	- macro
 	~	- Alias name (useful for Hoskier, etc.)
 	@	- Verse maker
+	/	- switch parallel
+	%-	- Begin lacuna
+	%?  - check lacuna
+	%+	- End lacuna
 	{	- Bracket section of readings and witnesses (used for vi filter)
 	}	- End Section
 	[	- Begin readings
@@ -53,9 +59,10 @@
 	<	- Begin witnesses
 	|	- separator
 	>	- End Witness
-	$	- macro
 	-	- suppress witness
 	:	- corrector
+	;	- list terminator for *, =, etc.
+	+   - eat lists until terminator.
 	!	- user end
 	default - name of witness/reading
 */
@@ -67,8 +74,6 @@
 #define CVT '~'					// Convert separator
 
 #define MISSING  '?'
-#define LACUNOSE '.'
-#define UNASSIGN ':'
 
 #define YEARGRAN 100			// Assume 100-year granularity
 #define LITGRAN (-1)			// Literary Granularity, use table
@@ -84,9 +89,9 @@ typedef enum { OK, WARN, END, FATAL, } Status;
 
 static char *getToken(Context *ctx);
 static Macro *getMacro(Context *ctx, char *token);
-static int findMSS(Context *ctx, char *name, int *hand);
+static int findMSS(Context *ctx, char *name, int *hh);
 static int findPar(Context *ctx, int code);
-static char *parName(Context *ctx, int pp, Testim *t, int h, char *name);
+static char *parName(Context *ctx, int pp, int corrected, int hh, char *name);
 static char *append(char *src, char *end, char *dst);
 static void fWarn(Context *ctx, char *cmd, char *msg, char *arg);
 static int activeMSS(Context *ctx);
@@ -104,6 +109,7 @@ static int initContext(Context *ctx, int argc, char *argv[]);
 static Status doMSS(Context *ctx);
 static Status doParallel(Context *ctx);
 static Status doDefine(Context *ctx);
+static Status doLacuna(Context *ctx);
 static Status doVerse(Context *ctx);
 static Status doReadings(Context *ctx);
 static Status doWitnesses(Context *ctx);
@@ -111,6 +117,7 @@ static Status doChron(Context *ctx);
 static Status doSuppress(Context *ctx);
 static Status doComment(Context *ctx);
 static Status doAlias(Context *ctx);
+static Status doEat(Context *ctx);
 
 static Status vrVerse(Context *ctx);
 static Status vrReadings(Context *ctx);
@@ -132,6 +139,7 @@ int
 	if ((yearGran = getenv("YEARGRAN")))
 		YearGran = atoi(yearGran);
 
+	ctx->token_lineno = ctx->lineno;
 	while ((token = getToken(ctx))) {
 		switch (*token) {
 		default:
@@ -149,6 +157,9 @@ int
 			break;
 		case '=':
 			status = doDefine(ctx);
+			break;
+		case '%':
+			status = doLacuna(ctx);
 			break;
 		case '@':
 			status = doVerse(ctx);
@@ -171,6 +182,8 @@ int
 		case '"':
 			status = doComment(ctx);
 			break;
+		case '+':
+			status = doEat(ctx);
 		case '{':
 		case '}':
 			// Ignore
@@ -247,6 +260,7 @@ static Macro *
 {
 	int name = (int) token[1];
 
+	ctx->token_lineno = ctx->lineno;
 	if (name < 0 || name > MAXMACRO) {
 		fWarn(ctx, "<", "Out-of-range macro (could be Greek):", token);
 		return 0;
@@ -255,24 +269,28 @@ static Macro *
 }
 
 static int
-	findMSS(Context *ctx, char *name, int *hand)
+	findMSS(Context *ctx, char *name, int *hh)
 {
 	int ms, status;
-	char *dot, *colon;
+	char *dot, *colon, *tick;
 	dot = strchr(name, '.');
 	colon = strchr(name, ':');
+	tick = strchr(name, '\'');
 
 	// ECM data uses the dot as a witness separator, so chuck the trailing dot.
 	if (dot && dot[1] == EOS)
 		*dot = EOS;
+	// ECM is putting lots of annotations after a siglum, so chuck what after an inserted tick.
+	if (tick)
+		*tick = EOS;
 
-	*hand = 0;
+	*hh = 0;
 	if (*name == '-')
 		return SUPPRESSED;
 
 	if (colon) {
-		*hand = atoi(colon+1);
-		if (*hand > MAXHAND)
+		*hh = atoi(colon+1);
+		if (*hh > MAXHAND)
 			return BADHAND;
 		*colon = EOS;
 	}
@@ -280,11 +298,8 @@ static int
 	status = NOMSS;
 	for (ms = 0; ms < ctx->nMSS; ms++) {
 		register Witness *w = &ctx->mss[ms];
-		register Testim  *t = &ctx->par[ctx->parallel].testim[ms];
 		if (strcmp(name, w->name) == 0) {
-			if (t->hands[*hand].suppressed)
-				status = SUPPRESSED;
-			else if (ctx->Root && ms == 0)
+			if (ctx->Root && ms == 0)
 				status = NOMSS;				// Cannot find ROOT
 			else
 				status = ms;
@@ -311,15 +326,15 @@ static int
 }
 
 static char *
-	parName(Context *ctx, int pp, Testim *t, int h, char *name)
+	parName(Context *ctx, int pp, int corrected, int hh, char *name)
 {
 	int code;
 	static char buf[MAXTOKEN];
 	char *b = buf;
 
 	b += sprintf(buf, "%s", name);
-	if (t && t->corrected)
-		b += sprintf(b, ":%d", h);
+	if (corrected)
+		b += sprintf(b, ":%d", hh);
 
 	code = ctx->par[pp].name_space;
 	if (code > 1)
@@ -347,7 +362,7 @@ static void
 {
 	int col;
 
-	col = fprintf(stderr, "%4lu: %s", ctx->lineno, cmd);
+	col = fprintf(stderr, "%4lu: %s (%4lu)", ctx->lineno, cmd, ctx->token_lineno);
 	do { col += fprintf(stderr, " "); } while (col < 6);
 
 	col += fprintf(stderr, "%s", msg);
@@ -369,14 +384,14 @@ static void
 static int
 	activeMSS(Context *ctx)
 {
-	int pp, ms, hand;
+	int pp, ms, hh;
 	int nActive = 0;
 
 	for (pp = 0; pp < ctx->nParallels; pp++)
 	for (ms = 0; ms < ctx->nMSS; ms++) {
-		Testim *t = &ctx->par[pp].testim[ms];
-		for (hand = 0; hand < MAXHAND; hand++) {
-			if (!t->hands[hand].suppressed)
+		Hand *hands = ctx->par[pp].msHands[ms];
+		for (hh = 0; hh < MAXHAND; hh++) {
+			if (!hands[hh].suppressed)
 				nActive++;
 		}
 	}
@@ -385,7 +400,7 @@ static int
 
 
 static int
-	findAland(Context *ctx, char *name, int *hand, int ms)
+	findAland(Context *ctx, char *name, int *hh, int ms)
 {
 	char *colon = strchr(name, ':');
 
@@ -393,10 +408,10 @@ static int
 		return ms;
 
 	if (colon) {
-		*hand = atoi(colon+1);
+		*hh = atoi(colon+1);
 		*colon = EOS;
 	} else
-		*hand = 0;
+		*hh = 0;
 
 	do {
 		if (strcmp(name, ctx->mss[ms].Aland) == 0)
@@ -415,10 +430,10 @@ static void
 	mandateTx(Context *ctx)
 {
 	Parallel *para = &ctx->par[ctx->parallel];
-	Testim *t;
+	Hand *hands;
 	Macro *macro;
 	char **mandatees;
-	int pp, ms, hand;
+	int pp, ms, hh;
 	Status status = OK;
 
 	// Nothing specified on the command-line
@@ -431,7 +446,7 @@ static void
 
 		switch (mand[0]) {
 		default:
-			ms = findMSS(ctx, mand, &hand);
+			ms = findMSS(ctx, mand, &hh);
 			if (ms == SUPPRESSED) {
 				fWarn(ctx, "+", "Already suppressed:", mand);
 				status = WARN;
@@ -442,8 +457,8 @@ static void
 				status = WARN;
 				continue;
 			}
-			t = &para->testim[ms];
-			t->hands[hand].mandated = YES;
+			hands = para->msHands[ms];
+			hands[hh].mandated = YES;
 			break;
 		case '$':
 			macro = getMacro(ctx, mand);
@@ -455,8 +470,8 @@ static void
 			for (ms = (ctx->Root) ? 1 : 0; ms < ctx->nMSS; ms++) {
 				if (!macro->inset[ms])
 					continue;
-				t = &para->testim[ms];
-				t->hands[0].mandated = YES;
+				hands = para->msHands[ms];
+				hands[0].mandated = YES;
 			}
 			break;
 		}
@@ -468,10 +483,10 @@ static void
 	// Suppress everything not mandated.
 	for (pp = 0; pp < ctx->nParallels; pp++)
 	for (ms = 0; ms < ctx->nMSS; ms++) {
-		t = &ctx->par[pp].testim[ms];
-		for (hand = 0; hand < MAXHAND; hand++) {
-			if (!t->hands[hand].suppressed && !t->hands[hand].mandated)
-				t->hands[hand].suppressed = YES;
+		Hand *hands = ctx->par[pp].msHands[ms];
+		for (hh = 0; hh < MAXHAND; hh++) {
+			if (!hands[hh].suppressed && !hands[hh].mandated)
+				hands[hh].suppressed = YES;
 		}
 	}
 }
@@ -480,17 +495,17 @@ static void
 	suppressTx(Context *ctx)
 {
 	int fThresh, cThresh;
-	int ms, pc, h, i, nExtant, nCorrs;
+	int ms, pc, hh, i, nExtant, nCorrs;
 	int pp;
 	int var;
 	char * r;
 	char *threshenv, *yearenv;
-	int year, lastHand;
+	int year, lastHand, nHands;
 
-	fThresh = (threshenv = getenv("FTHRESH")) ? atoi(threshenv)
+	fThresh = (threshenv = getenv("FRAG")) ? atoi(threshenv)
 //		: (ctx->nVar > 2*FTHRESHOLD) ? FTHRESHOLD
 		: ctx->wvar/2 + 1;
-	cThresh = (threshenv = getenv("CTHRESH")) ? atoi(threshenv)
+	cThresh = (threshenv = getenv("CORR")) ? atoi(threshenv)
 		: (ctx->nVar > 2*CTHRESHOLD) ? CTHRESHOLD 
 		: ctx->wvar/10 + 1;
 	fprintf(stderr, "Thresholds: frag=%d, corr=%d; adjustments:",
@@ -498,67 +513,67 @@ static void
 	for (pp = 0; pp < ctx->nParallels; pp++)
 	for (ms = 0; ms < ctx->nMSS; ms++) {
 		register Witness *w = &ctx->mss[ms];
-		register Testim  *t = &ctx->par[pp].testim[ms];
+		register Hand *hands = ctx->par[pp].msHands[ms];
 
-		if (t->hands[0].suppressed)
-			continue;
-		t->corrected = NO;
 		nExtant = 0;
 		var = 0;
 		for (pc = 0; pc < ctx->nPiece; pc++) {
-			if (!t->hands[0].sets[pc]) {
+			if (!hands[0].sets[pc]) {
 				var += ctx->pieceUnits[pc];
 				continue;
 			}
-			r = t->hands[0].sets[pc];
+			r = hands[0].sets[pc];
 			for (i = 0; r[i]; i++) {
 				if (r[i] != MISSING)
 					nExtant += ctx->wgts[var];
 				var++;
 			}
 		}
-		if ((!ctx->Root || ms > 0) && (nExtant < fThresh) && !t->hands[0].mandated) {
-			t->hands[0].suppressed = YES;
+		if ((!ctx->Root || ms > 0) && (nExtant < fThresh) && !hands[0].mandated) {
+			hands[0].suppressed = YES;
 			fprintf(stderr, " -%s(%d)",
-				parName(ctx, pp, t, 0, w->name), nExtant);
+				parName(ctx, pp, NO, 0, w->name), nExtant);
 		}
 
 		lastHand = 0;
-		for (h = 1; h < MAXHAND; h++) {
+		for (hh = 1; hh < MAXHAND; hh++) {
 			nCorrs = 0;
 			var = 0;
 			for (pc = 0; pc < ctx->nPiece; pc++) {
 				char *lh;
-				if (!t->hands[h].sets[pc]) {
-					t->hands[h].sets[pc] = t->hands[lastHand].sets[pc];
+				if (!hands[hh].sets[pc]) {
+					hands[hh].sets[pc] = hands[lastHand].sets[pc];
 					var += ctx->pieceUnits[pc];
 					continue;
 				}
-				r = t->hands[h].sets[pc];
-				lh = t->hands[lastHand].sets[pc];
+				r = hands[hh].sets[pc];
+				lh = hands[lastHand].sets[pc];
 				for (i = 0; r[i]; i++) {
-					if (lh && r[i] != lh[i])
+					char lhRdg = (lh) ? lh[i] : MISSING;	// Default to MISSING for hands in $?
+					if (r[i] != lhRdg)
 						nCorrs += ctx->wgts[var];
 					var++;
 				}
 			}
-			if ((nCorrs < cThresh) && !t->hands[h].mandated ) {
-				t->hands[h].suppressed = YES;
-				if (nCorrs > cThresh/2) {
-					t->corrected = YES;
-					fprintf(stderr, " -%s(%d)",
-						parName(ctx, pp, t, h, w->name), nCorrs);
-					t->corrected = NO;
-				}
+			if ((nCorrs < cThresh) && !hands[hh].mandated) {
+				hands[hh].suppressed = YES;
+				if (nCorrs > cThresh/2)
+					fprintf(stderr, " -%s(%d)", parName(ctx, pp, YES, hh, w->name), nCorrs);
 			} else {
-				t->corrected = YES;
-				t->hands[h].suppressed = NO;
-				t->hands[h].lastHand = lastHand;
-				lastHand = h;
+				hands[hh].lastHand = lastHand;
+				lastHand = hh;
 				fprintf(stderr, " +%s(%d)",
-					parName(ctx, pp, t, h, w->name), nCorrs);
+					parName(ctx, pp, w->corrected, hh, w->name), nCorrs);
 			}
 		}
+
+		// A manuscript is corrected if there is more than one unsuppressed hand.
+		nHands = 0;
+		for (hh = 0; hh < MAXHAND; hh++) {
+			if (hands[hh].suppressed == NO)
+				nHands++;
+		}
+		w->corrected = (nHands > 1) ? YES : NO;
 	}
 	fprintf(stderr, "\n");
 	
@@ -571,15 +586,15 @@ static void
 	for (pp = 0; pp < ctx->nParallels; pp++)
 	for (ms = 0; ms < ctx->nMSS; ms++) {
 		register Witness *w = &ctx->mss[ms];
-		register Testim  *t = &ctx->par[pp].testim[ms];
+		register Hand *hands = ctx->par[pp].msHands[ms];
 
-		for (h = 0; h < MAXHAND; h++) {
-			if (t->hands[h].suppressed)
+		for (hh = 0; hh < MAXHAND; hh++) {
+			if (hands[hh].suppressed)
 				continue;
-			if ((t->hands[h].earliest > year) && !t->hands[h].mandated) {
-				t->hands[h].suppressed = YES;
+			if ((hands[hh].earliest > year) && !hands[hh].mandated) {
+				hands[hh].suppressed = YES;
 				fprintf(stderr, " -%s(%d)",
-					parName(ctx, pp, t, h, w->name), t->hands[h].earliest);
+					parName(ctx, pp, w->corrected, hh, w->name), hands[hh].earliest);
 			}
 		}
 	}
@@ -591,7 +606,7 @@ static void
 static void
 	suppressVr(Context *ctx)
 {
-	int ms, pp, h, pc, pv, var;
+	int ms, pp, hh, pc, pv, var;
 	char *r;
 	int state;
 
@@ -605,16 +620,16 @@ static void
 
 			for (pp = 0; pp < ctx->nParallels; pp++)
 			for (ms = 0; ms < ctx->nMSS; ms++) {
-				register Testim  *t = &ctx->par[pp].testim[ms];
+				register Hand *hands = ctx->par[pp].msHands[ms];
 				int defchar = (ctx->Root && pp == 00 && ms == 0)
 					? '0' : MISSING;
 
-				for (h = 0; h < MAXHAND; h++) {
-					if (t->hands[h].suppressed)
+				for (hh = 0; hh < MAXHAND; hh++) {
+					if (hands[hh].suppressed)
 						continue;
-					r = t->hands[h].sets[pc];
-					if (!r && h > 0)
-						r = t->hands[t->hands[h].lastHand].sets[pc];
+					r = hands[hh].sets[pc];
+					if (!r && hh > 0)
+						r = hands[hands[hh].lastHand].sets[pc];
 					state = (r) ? r[pv] : defchar;
 
 					if (state == MISSING)
@@ -660,24 +675,24 @@ static void
 	for (pp = 0; pp < ctx->nParallels; pp++)
 	for (ms = 0; ms < ctx->nMSS; ms++) {
 		register Witness *w = &ctx->mss[ms];
-		register Testim  *t = &ctx->par[pp].testim[ms];
+		register Hand *hands = ctx->par[pp].msHands[ms];
 		int m2;
 
-		if (t->hands[0].suppressed)
+		if (hands[0].suppressed)
 			continue;
 		for (m2 = 0; m2 < ms; m2++) {
 			register Witness *w2 = &ctx->mss[m2];
-			register Testim  *t2 = &ctx->par[pp].testim[m2];
+			register Hand *hand2 = ctx->par[pp].msHands[m2];
 			int pc;
 
-			if (t2->hands[0].suppressed)
+			if (hand2[0].suppressed)
 				continue;
 			for (pc = 0; pc < ctx->nPiece; pc++) {
-				if (t->hands[0].sets[pc] != t2->hands[0].sets[pc])
+				if (hands[0].sets[pc] != hand2[0].sets[pc])
 					break;
 			}
 			if (pc == ctx->nPiece) {
-				t->hands[0].suppressed = YES;
+				hands[0].suppressed = YES;
 				fprintf(stderr, " -%s=%s", w->name, w2->name);
 				break;
 			}
@@ -689,7 +704,7 @@ static void
 static void
 	writeTx(Context *ctx)
 {
-	int ms, pp, h, pc, pv, vv, var;
+	int ms, pp, hh, pc, pv, vv, var;
 	int nActive = activeMSS(ctx);
 
 	// Output
@@ -701,19 +716,19 @@ static void
 	for (pp = 0; pp < ctx->nParallels; pp++)
 	for (ms = 0; ms < ctx->nMSS; ms++) {
 		register Witness *w = &ctx->mss[ms];
-		register Testim  *t = &ctx->par[pp].testim[ms];
+		register Hand *hands = ctx->par[pp].msHands[ms];
 		int defchar = (ctx->Root && pp == 0 && ms == 0) ? '0' : MISSING;
 
-		for (h = 0; h < MAXHAND; h++) {
-			if (t->hands[h].suppressed)
+		for (hh = 0; hh < MAXHAND; hh++) {
+			if (hands[hh].suppressed)
 				continue;
-			fprintf(ctx->fpTx, "%-9s ", parName(ctx, pp, t, h, w->pname));
-			printf(" %s", parName(ctx, pp, t, h, w->pname));
+			fprintf(ctx->fpTx, "%-9s ", parName(ctx, pp, w->corrected, hh, w->pname));
+			printf(" %s", parName(ctx, pp, w->corrected, hh, w->pname));
 			var = 0;
 			for (pc = 0; pc < ctx->nPiece; pc++) {
-				char *r = t->hands[h].sets[pc];
-				if (!r && h > 0)
-					r = t->hands[t->hands[h].lastHand].sets[pc];
+				char *r = hands[hh].sets[pc];
+				if (!r && hh > 0)
+					r = hands[hands[hh].lastHand].sets[pc];
 				for (pv = 0; pv < ctx->pieceUnits[pc]; pv++) {
 					for (vv = 0; vv < ctx->wgts[var]; vv++)
 						fputc((r) ? r[pv] : defchar, ctx->fpTx);
@@ -732,20 +747,20 @@ static void
 #define MAXYEAR 2050
 	static int strata[MAXYEAR];
 	int stratum;
-	int ms, pp, h, yr;	
+	int ms, pp, hh, yr;	
 
 	for (yr = 0; yr < MAXYEAR; yr++)
 		strata[yr] = NO;
 
 	for (pp = 0; pp < ctx->nParallels; pp++)
 	for (ms = 0; ms < ctx->nMSS; ms++) {
-		register Testim  *t = &ctx->par[pp].testim[ms];
+		register Hand *hands = ctx->par[pp].msHands[ms];
 
-		for (h = 0; h < MAXHAND; h++) {
-			if (t->hands[h].suppressed)
+		for (hh = 0; hh < MAXHAND; hh++) {
+			if (hands[hh].suppressed)
 				continue;
-			stratum = litStratum(t->hands[h].average);
-			t->hands[h].stratum = stratum;
+			stratum = litStratum(hands[hh].average);
+			hands[hh].stratum = stratum;
 			strata[stratum] = YES;
 		}
 	}
@@ -758,11 +773,11 @@ static void
 
 	for (pp = 0; pp < ctx->nParallels; pp++)
 	for (ms = 0; ms < ctx->nMSS; ms++) {
-		register Testim  *t = &ctx->par[pp].testim[ms];
-		for (h = 0; h < MAXHAND; h++) {
-			if (t->hands[h].suppressed)
+		register Hand *hands = ctx->par[pp].msHands[ms];
+		for (hh = 0; hh < MAXHAND; hh++) {
+			if (hands[hh].suppressed)
 				continue;
-			t->hands[h].stratum = strata[t->hands[h].stratum];
+			hands[hh].stratum = strata[hands[hh].stratum];
 		}
 	}
 }
@@ -772,39 +787,39 @@ static void
 {
 	int pp, p2;
 	int ms, m2;
-	int h, h2;
+	int hh, h2;
 
 	// Output
 	stratify(ctx);
 	for (pp = 0; pp < ctx->nParallels; pp++)
 	for (ms = 0; ms < ctx->nMSS; ms++) {
 		register Witness *w = &ctx->mss[ms];
-		register Testim  *t = &ctx->par[pp].testim[ms];
-		for (h = 0; h < MAXHAND; h++) {
-			if (t->hands[h].suppressed)
+		register Hand *hands = ctx->par[pp].msHands[ms];
+		for (hh = 0; hh < MAXHAND; hh++) {
+			if (hands[hh].suppressed)
 				continue;
-			if (t->hands[h].latest == INT_MAX) {
+			if (hands[hh].latest == INT_MAX) {
 				fprintf(stderr, "No chron entry for ");
-				fprintf(stderr, "%s",      parName(ctx, pp, t, h, w->name));
-				fprintf(stderr, " ~ %s",   parName(ctx, pp, 0, 0, w->Aland));
-				fprintf(stderr, " ~ %s\n", parName(ctx, pp, 0, 0, w->pname));
+				fprintf(stderr, "%s",      parName(ctx, pp, w->corrected, hh, w->name));
+				fprintf(stderr, " ~ %s",   parName(ctx, pp, w->corrected, 0, w->Aland));
+				fprintf(stderr, " ~ %s\n", parName(ctx, pp, w->corrected, 0, w->pname));
 			}
 			fprintf(ctx->fpNo, "%-9s %d < ",
-				parName(ctx, pp, t, h, w->pname), t->hands[h].stratum);
+				parName(ctx, pp, w->corrected, hh, w->pname), hands[hh].stratum);
 
 			for (p2 = 0; p2 < ctx->nParallels; p2++)
 			for (m2 = 0; m2 < ctx->nMSS; m2++) {
 				register Witness *w2 = &ctx->mss[m2];
-				register Testim  *t2 = &ctx->par[p2].testim[m2];
+				register Hand *hand2 = ctx->par[pp].msHands[m2];
 				for (h2 = 0; h2 < MAXHAND; h2++) {
-					if (t2->hands[h2].suppressed)
+					if (hand2[h2].suppressed)
 						continue;
-					if (t->hands[h].earliest > t2->hands[h2].latest) {
+					if (hands[hh].earliest > hand2[h2].latest) {
 						fprintf(ctx->fpNo, "%s ",
-							parName(ctx, p2, t2, h2, w2->pname));
-					} else if (w == w2 && pp == p2 && h >= h2) {
+							parName(ctx, p2, w2->corrected, h2, w2->pname));
+					} else if (w == w2 && pp == p2 && hh >= h2) {
 						fprintf(ctx->fpNo, "%s ",
-							parName(ctx, p2, t2, h2, w2->pname));
+							parName(ctx, p2, w2->corrected, h2, w2->pname));
 					}
 				}
 			}
@@ -876,6 +891,7 @@ static int
 		default:
 			break;
 		case '@':
+			ctx->token_lineno = ctx->lineno;
 			token = getToken(ctx);
 			if (!token) {
 				EOFWARN(ctx, "@");
@@ -884,6 +900,7 @@ static int
 			strcpy(ctx->par[ctx->parallel].position, token);
 			break;
 		case '*':
+			ctx->token_lineno = ctx->lineno;
 			while ((token = getToken(ctx)) && *token != ';') {
 				if (*token == '"')
 					EAT(ctx, token, '"');
@@ -898,6 +915,7 @@ static int
 			}
 			break;
 		case '<':
+			ctx->token_lineno = ctx->lineno;
 			ctx->nSets++;
 			while ((token = getToken(ctx)) && *token != '>') {
 				if (*token == '"') {
@@ -916,6 +934,7 @@ static int
 			}
 			break;
 		case '[':
+			ctx->token_lineno = ctx->lineno;
 			ctx->nPiece++;
 			while ((token = getToken(ctx)) && *token != ']') {
 				if (*token == '"') {
@@ -934,6 +953,7 @@ static int
 			}
 			break;
 		case '"':
+			ctx->token_lineno = ctx->lineno;
 			EAT(ctx, token, '"');
 			if (!token) {
 				EOFWARN(ctx, "\"");
@@ -1029,13 +1049,13 @@ static void
 			w->pname = strdup(s);
 		}
 	}
-
+	w->corrected = NO;
 }
 
 static void
 	initParallel(Context *ctx, Parallel *p, int name)
 {
-	int ms, h;
+	int ms, hh;
 	Macro *all; 		// The $* macro, holds all the taxa
 	Macro *miss;		// The $? macro, holds the missing taxa
 
@@ -1060,28 +1080,29 @@ static void
 	assert( miss->inset );
 	p->pMacros['?'] = miss;
 
-	p->testim = new(ctx->nMSS, Testim);
-	assert( p->testim );
+	p->msHands = new(ctx->nMSS, Hand *);
+	assert( p->msHands );
 
 	for (ms = 0; ms < ctx->nMSS; ms++) {
-		Testim *t = &p->testim[ms];
 		all->inset[ms] = YES;
 		miss->inset[ms] = NO;
 
-		t->hands = new(MAXHAND, Hand);
-		for (h = 0; h < MAXHAND; h++) {
+		p->msHands[ms] = new(MAXHAND, Hand);
+		assert( p->msHands[ms] );
+		for (hh = 0; hh < MAXHAND; hh++) {
+			Hand *hands = p->msHands[ms];
 			int ii;
 
-			t->hands[h].sets = new(ctx->nPiece, char *);
-			assert( t->hands[h].sets );
+			hands[hh].sets = new(ctx->nPiece, char *);
+			assert( hands[hh].sets );
 			for (ii = 0; ii < ctx->nPiece; ii++)
-				t->hands[h].sets[ii] = (char *) 0;
-			t->hands[h].earliest = t->hands[h].average = 0;
-			t->hands[h].latest = INT_MAX;
-			t->hands[h].suppressed = (ctx->Root && ms == 0) ? YES : NO;		// Possibly redundant with code in doMSS()
-			t->hands[h].mandated = NO;
+				hands[hh].sets[ii] = (char *) 0;
+			hands[hh].earliest = hands[hh].average = 0;
+			hands[hh].latest = INT_MAX;
+			hands[hh].suppressed = (ctx->Root && ms == 0) ? YES : NO;		// Possibly redundant with code in doMSS()
+			hands[hh].mandated = NO;
+			hands[hh].inLacuna = NO;
 		}
-		t->corrected = NO;
 	}
 }
 
@@ -1096,6 +1117,7 @@ static Status
 		fWarn(ctx, "*", "Already declared the witnesses.", "");
 		return FATAL;
 	}
+	ctx->token_lineno = ctx->lineno;
 	ctx->mss = new(ctx->nMSS, Witness);
 	assert( ctx->mss );
 	
@@ -1125,10 +1147,10 @@ static Status
 
 			// Unsuppress ROOT in the earliest parallel
 			if (ctx->Root) {
-				Hand *hand = &ctx->par[0].testim[0].hands[0];
-				hand->earliest = hand->average = hand->latest = 0;
-				hand->suppressed = NO;
-				hand->mandated = YES;
+				Hand *h = &ctx->par[0].msHands[0][0];
+				h->earliest = h->average = h->latest = 0;
+				h->suppressed = NO;
+				h->mandated = YES;
 			}
 	
 			return OK;
@@ -1160,19 +1182,23 @@ static Status
 static Status
 	doDefine(Context *ctx)
 {
-	char *token;
+	char *token = ctx->token;
 	Macro *macro, *mac2;
 	int name;
-	int ms, hand;
-	int add=NO, sub=NO, check=NO;
+	int ms, hh;
+	enum { SET, ADD, SUB, CHK, } act;
 	int nWarn = 0;
 
-	if (ctx->token[1] == '+')
-		add = YES;
-	if (ctx->token[1] == '-')
-		sub = YES;
-	if (ctx->token[1] == '?')
-	    check = YES;
+	switch (token[1]) {
+	case EOS: act = SET; break;
+	case '+': act = ADD; break;
+	case '-': act = SUB; break;
+	case '?': act = CHK; break;
+	default:
+		fWarn(ctx, "=", "Command must be either = =+ =- or =?:", token);
+		return FATAL;
+	}
+
 	token = getToken(ctx);
 	if (*token != '$') {
 		fWarn(ctx, "=", "Macro name must begin with $:", token);
@@ -1185,6 +1211,7 @@ static Status
 		return FATAL;
 	}
 
+	ctx->token_lineno = ctx->lineno;
 	macro = ctx->par[ctx->parallel].pMacros[name];
 	if (!macro) {
 		macro = new(1, Macro);
@@ -1195,7 +1222,7 @@ static Status
 		ctx->par[ctx->parallel].pMacros[name] = macro;
 		for (ms = 0; ms < ctx->nMSS; ms++)
 			macro->inset[ms] = NO;
-	} else if (!add && !sub && !check) {
+	} else if (act == SET) {
 		for (ms = 0; ms < ctx->nMSS; ms++)
 			macro->inset[ms] = NO;
 	}
@@ -1203,7 +1230,7 @@ static Status
 	while ((token = getToken(ctx))) {
 		switch (*token) {
 		default:
-			ms = findMSS(ctx, token, &hand);
+			ms = findMSS(ctx, token, &hh);
 			if (ms == NOMSS) {
 				fWarn(ctx, "=", "Unknown:", token);
 
@@ -1214,21 +1241,27 @@ static Status
 				continue;
 			} else if (ms == SUPPRESSED)
 				continue;
-			if (ms == BADHAND || hand > 0) {
+			if (ms == BADHAND || hh > 0) {
 				fWarn(ctx, "=", "No macros with correctors:", token);
 				continue;
 			}
-			if (check) {
+
+			switch (act) {
+			case CHK:
 				if (!macro->inset[ms]) {
-					fWarn(ctx, "=", "Check failed for :", token);
+					char buf[MAXTOKEN*2];
+					sprintf(buf, "Check failed for macro $%c:", name);
+					fWarn(ctx, "=", buf, token);
 					nWarn++;
 				}
-				continue;
-			}
-			if (sub)
+				break;
+			case SUB:
 				macro->inset[ms] = NO;
-			else
+				break;
+			case ADD: case SET: default:
 				macro->inset[ms] = YES;
+				break;
+			}
 			break;
 		case '$':
 			mac2 = getMacro(ctx, token);
@@ -1240,17 +1273,23 @@ static Status
 			for (ms = 0; ms < ctx->nMSS; ms++) {
 				if (!mac2->inset[ms])
 					continue;
-				if (check) {
+
+				switch (act) {
+				case CHK:
 					if (!macro->inset[ms]) {
-						fWarn(ctx, "=", "Check failed for :", token);
+						char buf[MAXTOKEN*2];
+						sprintf(buf, "Check failed for macro $%c:", name);
+						fWarn(ctx, "=", buf, token);
 						nWarn++;
 					}
-					continue;
-				}
-				if (sub)
+					break;
+				case SUB:
 					macro->inset[ms] = NO;
-				else
+					break;
+				case ADD: case SET: default:
 					macro->inset[ms] = YES;
+					break;
+				}
 			}
 			break;
 		case ';':
@@ -1262,12 +1301,91 @@ static Status
 	return FATAL;
 }
 
+// Syntax: %- {mss-name}+ ;  " start of lacuna for mss "
+// Syntax: %+ {mss-name}+ ;  " end of lacuna for mss "
+static Status
+	doLacuna(Context *ctx)
+{
+	int nWarn = 0;
+	char *token = ctx->token;
+	Hand *h;
+	int ms, hh;
+	enum { ADD, SUB, CHK } act;
+
+	switch (token[1]) {
+	case '+': act = ADD; break;
+	case '-': act = SUB; break;
+	case '?': act = CHK; break;
+	default:
+		fWarn(ctx, "%", "Command must be either %+ or %-:", token);
+		return FATAL;
+	}
+
+	// Mark or unmark each lacunose witness
+	while ((token = getToken(ctx))) {
+		switch (*token) {
+		default:
+			ms = findMSS(ctx, token, &hh);
+			if (ms == NOMSS) {
+				fWarn(ctx, "%", "Unknown:", token);
+
+				// Upgrade error if termination is in witness
+				if (strchr(token, ';'))
+					return FATAL;
+				nWarn++;
+				continue;
+			} else if (ms == SUPPRESSED)
+				continue;
+			else if (ms == BADHAND) {
+				fWarn(ctx, "%", "Bad hand:", token);
+				continue;
+			}
+			h = &ctx->par[ctx->parallel].msHands[ms][hh];
+			switch (act) {
+			case ADD:
+				if (h->inLacuna == NO) {
+					fWarn(ctx, "%", "Already out of lacuna:", token);
+					nWarn++;
+				}
+				h->inLacuna = NO;
+				break;
+			case SUB:
+				if (h->inLacuna == YES) {
+					fWarn(ctx, "%", "Already in lacuna:", token);
+					nWarn++;
+				}
+				h->inLacuna = YES;
+				break;
+			case CHK:
+				if (h->inLacuna == NO) {
+					fWarn(ctx, "%", "Should be in lacuna:", token);
+					nWarn++;
+				}
+				break;
+			default:
+				assert( act == ADD || act == SUB || act == CHK );
+			}
+			break;
+		case '$':
+			fWarn(ctx, "%", "Macros in lacuna specifer unsupported (yet):", token);
+			nWarn++;
+			break;
+		case ';':
+			return (nWarn == 0) ? OK : WARN;
+		}
+	}
+	EOFWARN(ctx, "%");
+	assert( token );
+	return FATAL;
+}
+
 // Syntax: @ {verse}
 static Status
 	doVerse(Context *ctx)
 {
 	char *token;
 
+	ctx->token_lineno = ctx->lineno;
 	token = getToken(ctx);
 	if (!token) {
 		EOFWARN(ctx, "@");
@@ -1289,6 +1407,7 @@ static Status
 	end = &ctx->lemma[dimof(ctx->lemma)];
 	*lem = EOS;
 
+	ctx->token_lineno = ctx->lineno;
 	ctx->piece++;
 	ctx->pieceUnits[ctx->piece] = 0;
 	while ((token = getToken(ctx))) {
@@ -1343,15 +1462,16 @@ static Status
 	doWitnesses(Context *ctx)
 {
 	char *token, *rdgs = (char *) 0, *s;
-	int states = YES, set, ms, hand;
+	int states = YES, set, ms, hh, vv;
 	Macro *macro;
 	int nWarn = 0;
 	Parallel *para = &ctx->par[ctx->parallel];
 
 	assert( ctx->mss );
+	ctx->token_lineno = ctx->lineno;
 	for (ms = 0; ms < ctx->nMSS; ms++) {
-		register Testim  *t = &para->testim[ms];
-		t->hands[0].level = 0;
+		register Hand *hands = para->msHands[ms];
+		hands[0].level = 0;
 	}
 
 	while ((token = getToken(ctx))) {
@@ -1360,7 +1480,7 @@ static Status
 			if (states) {
 				states = NO;
 				if (strlen(token) != ctx->pieceUnits[ctx->piece]) {
-					char buf[MAXTOKEN];
+					char buf[MAXTOKEN*2];
 					sprintf(buf, "%s (%zd) should have exactly %d\n",
 						token, strlen(token), ctx->pieceUnits[ctx->piece]);
 					fWarn(ctx, "<", "Variant mismatch:", buf);
@@ -1373,15 +1493,27 @@ static Status
 
 				rdgs = strdup(token);
 				assert( rdgs );
-				for (s = rdgs; (s = strchr(s, LACUNOSE)); )
-					*s = MISSING;
-				for (s = rdgs; (s = strchr(s, UNASSIGN)); )
-					*s = MISSING;
+
+				// Check if digit readings are in range:
+				s = rdgs;
+				for (vv = ctx->var - strlen(rdgs); vv < ctx->var; vv++) {
+					char rr = *s++;
+					if (isdigit(rr) && (rr - '0') > ctx->nRdgs[vv]) {
+						char buf[MAXTOKEN*2];
+						sprintf(buf, "%c @ %s[%ld] is more than %d.\n",
+							rr, rdgs, s - rdgs, ctx->nRdgs[vv]);
+						fWarn(ctx, "<", "Variant out of range: ", buf);
+						return FATAL;
+					}
+				}
+
+				// Mung readings here if necessary
+
 				ctx->states[set] = rdgs;
 			} else {
 				//register Witness *w;
-				register Testim  *t;
-				ms = findMSS(ctx, token, &hand);
+				register Hand *hands;
+				ms = findMSS(ctx, token, &hh);
 				if (ms == NOMSS || ms == BADHAND) {
 					fWarn(ctx, "<", "Unknown:", token);
 					if (*token == '<')
@@ -1391,16 +1523,16 @@ static Status
 				} else if (ms == SUPPRESSED)
 					continue;
 				//w = &ctx->mss[ms];
-				t = &para->testim[ms];
-				if (t->hands[hand].sets[ctx->piece]
-				&& t->hands[0].level == MAXMACRO) {
+				hands = para->msHands[ms];
+				if (hands[hh].sets[ctx->piece]
+				&& hands[0].level == MAXMACRO) {
 					fWarn(ctx, "<", "Duplicate:", token);
 					nWarn++;
 					continue;
 				}
 				assert( rdgs );
-				t->hands[hand].sets[ctx->piece] = rdgs;
-				t->hands[hand].level = MAXMACRO;
+				hands[hh].sets[ctx->piece] = rdgs;
+				hands[hh].level = MAXMACRO;
 			}
 			break;
 		case '$':
@@ -1411,18 +1543,20 @@ static Status
 				continue;
 			}
 			for (ms = 0; ms < ctx->nMSS; ms++) {
-				register Testim  *t = &para->testim[ms];
+				register Hand *hands = para->msHands[ms];
 				if (!macro->inset[ms])
 					continue;
-				if (t->hands[0].level > macro->level)
+				if (hands[0].inLacuna)
 					continue;
-				else if (t->hands[0].level == macro->level) {
+				if (hands[0].level > macro->level)
+					continue;
+				else if (hands[0].level == macro->level) {
 					fWarn(ctx, "<", "Duplicate macro:", token);
 					nWarn++;
 					continue;
 				}
-				t->hands[0].sets[ctx->piece] = rdgs;
-				t->hands[0].level = macro->level;
+				hands[0].sets[ctx->piece] = rdgs;
+				hands[0].level = macro->level;
 			}
 			break;
 		case '|':
@@ -1432,22 +1566,33 @@ static Status
 			for (ms = (ctx->Root && ctx->parallel == 0) ? 1 : 0;
 					ms < ctx->nMSS; ms++) {
 				register Witness *w = &ctx->mss[ms];
-				register Testim  *t = &para->testim[ms];
-				if (t->hands[0].suppressed)
+				register Hand *hands = para->msHands[ms];
+
+				if (hands[0].suppressed)
 					continue;
+
+				// Skip if ms is inLacuna (do hands later)
+				if (hands[0].inLacuna) {
+					if (hands[0].sets[ctx->piece]) {
+						fWarn(ctx, ">", "Assigning readings to a witness in lacuna (use $? instead): ", 
+							parName(ctx, ctx->parallel, w->corrected, 0, w->name));
+						nWarn++;
+					}
+					continue;
+				}
 
 				// Let implicit $? override macros
 				if (para->pMacros['?']->inset[ms]
-				&& t->hands[0].level <= para->pMacros['?']->level) {
-					t->hands[0].sets[ctx->piece] = 0;
+				&& hands[0].level <= para->pMacros['?']->level) {
+					hands[0].sets[ctx->piece] = 0;
 					continue;
 				}
 
 				// Warn if unassigned taxa are not in $?
-				if (!t->hands[0].sets[ctx->piece]
+				if (!hands[0].sets[ctx->piece]
 				&& !para->pMacros['?']->inset[ms]) {
-					fWarn(ctx, "<", "Unassigned:",
-						parName(ctx, ctx->parallel, t, 0, w->name));
+					fWarn(ctx, ">", "Unassigned:",
+						parName(ctx, ctx->parallel, w->corrected, 0, w->name));
 					nWarn++;
 					continue;
 				}
@@ -1471,6 +1616,7 @@ static Status
 	char witness[80];
 	int minD, midD, maxD;
 
+	ctx->token_lineno = ctx->lineno;
 	token = getToken(ctx);
 	if (!token) {
 		EOFWARN(ctx, "^");
@@ -1490,25 +1636,25 @@ static Status
 	}
 	
 	while (fscanf(fpChron, "%s %d %d %d", witness, &minD, &midD, &maxD) == 4) {
-		int hand = 0;
+		int hh = 0;
 		int ms = 0;
 
-		while ((ms = findAland(ctx, witness, &hand, ms)) < ctx->nMSS) {
+		while ((ms = findAland(ctx, witness, &hh, ms)) < ctx->nMSS) {
 			int pp;
 			for (pp = 0; pp < ctx->nParallels; pp++) {
-				register Testim *t = &ctx->par[pp].testim[ms];
-				int h;
+				register Hand *hands = ctx->par[pp].msHands[ms];
+				int h2;
 
-				t->hands[hand].earliest = minD;
-				t->hands[hand].average  = midD;
-				t->hands[hand].latest   = maxD;
+				hands[hh].earliest = minD;
+				hands[hh].average  = midD;
+				hands[hh].latest   = maxD;
 
-				if (hand != 0)
+				if (hh != 0)
 					continue;
-				for (h = 1; h < MAXHAND; h++) {
-					t->hands[h].earliest = minD;
-					t->hands[h].average  = midD;
-					t->hands[h].latest   = INT_MAX;
+				for (h2 = 1; h2 < MAXHAND; h2++) {
+					hands[h2].earliest = minD;
+					hands[h2].average  = midD;
+					hands[h2].latest   = INT_MAX;
 				}
 			}
 			ms++;
@@ -1524,17 +1670,18 @@ static Status
 	doSuppress(Context *ctx)
 {
 	char *token;
-	int ms, hand;
+	int ms, hh;
+	register Hand *hands;
 	Macro *macro;
 	Parallel *para = &ctx->par[ctx->parallel];
 	Status status = OK;
 
+	ctx->token_lineno = ctx->lineno;
 	ms = 0;
 	while ((token = getToken(ctx))) {
 		switch (*token) {
-			register Testim *t;
 		default:
-			ms = findMSS(ctx, token, &hand);
+			ms = findMSS(ctx, token, &hh);
 			if (ms == SUPPRESSED) {
 				fWarn(ctx, "-", "Already suppressed:", token);
 				status = WARN;
@@ -1545,12 +1692,12 @@ static Status
 				status = WARN;
 				continue;
 			}
-			t = &para->testim[ms];
-			if (hand != 0)
-				t->hands[hand].suppressed = YES;
+			hands = para->msHands[ms];
+			if (strchr(token, ':'))
+				hands[hh].suppressed = YES;
 			else {
-				for (hand = 0; hand < MAXHAND; hand++)
-					t->hands[hand].suppressed = YES;
+				for (hh = 0; hh < MAXHAND; hh++)
+					hands[hh].suppressed = YES;
 			}
 			break;
 		case '$':
@@ -1561,11 +1708,11 @@ static Status
 				continue;
 			}
 			for (ms = (ctx->Root) ? 1 : 0; ms < ctx->nMSS; ms++) {
-				register Testim  *t = &para->testim[ms];
+				register Hand *hands = para->msHands[ms];
 				if (!macro->inset[ms])
 					continue;
-				for (hand = 0; hand < MAXHAND; hand++)
-					t->hands[hand].suppressed = YES;
+				for (hh = 0; hh < MAXHAND; hh++)
+					hands[hh].suppressed = YES;
 			}
 			break;
 		case ';':
@@ -1583,6 +1730,7 @@ static Status
 {
 	char *token;
 
+	ctx->token_lineno = ctx->lineno;
 	while ((token = getToken(ctx)) != 0) {
 		if (*token == '"')
 			return OK;
@@ -1596,23 +1744,24 @@ static Status
 	doAlias(Context *ctx)
 {
 	char *token;
-	int ms, hand;
+	int ms, hh;
 	register Witness *w;
 
+	ctx->token_lineno = ctx->lineno;
 	token = getToken(ctx);
 	if (!token) {
 		EOFWARN(ctx, "~");
 		return FATAL;
 	}
 
-	ms = findMSS(ctx, token, &hand);
+	ms = findMSS(ctx, token, &hh);
 	if (ms == SUPPRESSED)
 		return OK;
 	if (ms == NOMSS) {
 		fWarn(ctx, "~", "Unknown:\n", token);
 		return FATAL;
 	}
-	if (hand > 0 || ms == BADHAND) {
+	if (hh > 0 || ms == BADHAND) {
 		fWarn(ctx, "~", "Cannot have a corrector:\n", token);
 		return FATAL;
 	}
@@ -1642,6 +1791,21 @@ static Status
 	return OK;
 }
 
+// Syntax:	+ {token-name}* ;
+static Status
+	doEat(Context *ctx)
+{
+	char *token;
+
+	ctx->token_lineno = ctx->lineno;
+	while ((token = getToken(ctx)) != 0) {
+		if (*token == ';')
+			return OK;
+	}
+	EOFWARN(ctx, "(comment)");
+	return FATAL;
+}
+
 /* ------------------------------------------------------ 
 ||
 ||  Write Variant Readings file
@@ -1659,7 +1823,7 @@ static Status
 	return OK;
 }
 
-// Syntax:	[ {lemma}* { | {*{n}} {var-state}+ }+ ]
+// Syntax:	[ {lemma}* { |{*{n}} {var-state}+ }+ ]
 static Status
 	vrReadings(Context *ctx)
 {
@@ -1722,6 +1886,7 @@ static void
 		case '*':
 		case '=':
 		case '-':
+		case '%':
 		case '+':
 			EAT(ctx, token, ';');
 			break;

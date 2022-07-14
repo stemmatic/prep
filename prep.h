@@ -17,6 +17,7 @@ struct hand {
 	int stratum;					// Chronological stratum
 	int suppressed;					// Suppressed?
 	int mandated;					// Mandated for output file?
+	int inLacuna;					// Witness is lacunose (defaults to MISSING)
 	int level;						// Priority level for current piece
 	int lastHand;					// Previous hand
 };
@@ -26,6 +27,7 @@ struct witness {
 	char *name;					// Name of the witness
 	char *Aland;				// Gregory-Aland name
 	char *pname;				// Print name (for translations)
+	int corrected;				// Has a corrector.
 };
 
 typedef struct macro Macro;
@@ -34,17 +36,11 @@ struct macro {
 	int *inset;					// Set of witnesses in the set
 };
 
-typedef struct testimony Testim;
-struct testimony {
-	int corrected;				// Has a corrector.
-	Hand *hands;				// Hand, 0=original, 1=first corrector
-};
-
 typedef struct parallel Parallel;
 struct parallel {
 	int name_space;				// Character code for Parallel.
 	char position[MAXTOKEN];	// Current position in the .mss file
-	Testim *testim;				// Testimony of witness in parallel.
+	Hand **msHands;				// MSS x Hand, 0=original, 1=first corrector
 	Macro **pMacros;			// 256 macros, indexed by character
 };
 
@@ -54,6 +50,7 @@ struct context {
 	int inc_line_p;				// Increment line number?
 	char token[MAXTOKEN];		// Current Token
 	char lemma[25];				// Current lemma
+	unsigned long token_lineno;	// Line Number of Token
 
 	FILE *fpMss;				// .mss file (in)
 	FILE *fpTx;					// .tx file (out)

@@ -1,8 +1,44 @@
+2022-07-04 Lacunose witnesses
+
+Currently I'm specifying lacunose witnesses via the special
+macro $?. It feels hackish, and it imports the limitations
+of macros (i.e., no hands). It seems better to specify the
+lacunas directly with + and -. Also the + and - with $? are
+backwards: (=+ $? a ; means that a becomes lacunose).
+
+Therefore, I should use %- for beginning of lacuna, and %+
+for the end. Then, I should retire the $? special macro.
+
+2022-07-03 Pooling witnesses
+
+Sometimes I want to pool two witnesses into one. For example,
+there are two Gothic witnesses in Galatians. They hardly
+overlap, and when they do, they are nearly identical. It may
+make good sense to combine or pool them. (1) Their joint
+witness could pass fragmentation/attestation thresholds.
+(2) They could annotate the real source of the information
+better. (3) When combined, their mixture is easier to detect.
+
+So a proposed syntax is:
+
+& goth gothA gothB ;  " Pool gothA and gothB into goth "
+
+Naturally, all these have to be in the Chron file. This
+instruction suppresses gothA and gothB in the output, and
+computes goth as their joint readings if they agree, the
+attested reading if one is '?'; and '?' if they disagree.
+
+I need to do this because the hand syntax (goth:0 goth:1)
+isn't really set up for this, especially in that each hand
+must be explicit (for error checking of ECM). And it will
+either override the first or the second, when that temporal
+semantics isn't what I want.
+
 2019-07-16 Weighing by Edit-Distance
 
 The question of whether and how to weigh the characters is
 a perennial one in cladistics. Currently, every unit is
-weigh the same, which could have its biases. But if every
+weighed the same, which could have its biases. But if every
 vunit weighs the same some nodes can be erected on apographies
 that appear, well, unimpressive. But on the other hand, it
 is not very clear how individual variants should be weighed

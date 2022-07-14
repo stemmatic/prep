@@ -6,7 +6,7 @@ test: $(UTS:%=%.log)
 
 .PRECIOUS:	%.tx
 %.tx: % $(BIN)/prep
-	THRESH=1 $(BIN)/prep $<
+	FRAG=1 CORR=1 $(BIN)/prep $<
 
 %.log: %.tx
 	echo "Doing $@" > $@

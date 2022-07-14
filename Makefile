@@ -1,5 +1,5 @@
 CFLAGS=-g -Wall #-pg
-#CFLAGS+=-O2
+CFLAGS+=-O2
 LDFLAGS=-lm #-pg
 
 BIN=$(HOME)/bin

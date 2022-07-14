@@ -1,13 +1,17 @@
-* a b c d ;
+* a b c d p q r ;
 
 ^ Chron
 
-= $? a ;
+" Can set a macro with a macro? "
+= $Q q r ;
+= $? p $Q ;
 
-@ U000 " Can I override a variable in $? ? "
+@ U003 " Can I override a lacunose witness? "
+" This should generate an error:  %- a ; "
+=+ $? a ;
 
 [ Set up various inclusion possibilities
-| 0/0 | 0/1 | 1/0 | 0/2 | 2/0 | 1/2 | 2/2 ]
+| 0/0 | 0/1 | 1/0 | 0/1 0/2 | 1/0 2/0 | 1/1 1/2 | 2/1 2/2 ]
 < 0010212 a c
 | 0102022 b d
 >

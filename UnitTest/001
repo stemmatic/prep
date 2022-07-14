@@ -1,7 +1,8 @@
-* a b c bc x y z ;
+* a b c bc x y z p ;
 ^ Chron
 
-= $? ;
+" p is completely lacunose "
+%- p ;
 
 @ Ustate001
 " Simple a -> [1] -> b, c test; expected answers are in bc. "
@@ -14,6 +15,6 @@
 | 00011010 c
 | 00001011 bc
 | 11111111 x
-| 11111111 y
+| 11111111 y.
 | 11111111 z
 >
