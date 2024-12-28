@@ -13,8 +13,8 @@
 		variants  - listing of each variant         (*.vr)
 
 	Environmental controls:
-		YEARGRAN  - Granularity for years.  Default is (-1),
-					which is tuned for the N.T.
+		YEARGRAN  - Granularity for years.  Default or (0) is
+		            no granularity. (-1) is tuned for the N.T.
 		FRAG      - Threshold number of non-constant variants
 					for including fragmentary witnesses.  (250)
 		CORR      - Threshold number of new non-constant variants
@@ -75,9 +75,8 @@
 
 #define MISSING  '?'
 
-#define YEARGRAN 100			// Assume 100-year granularity
 #define LITGRAN (-1)			// Literary Granularity, use table
-static int YearGran = LITGRAN;
+static int YearGran = 0;		// Default to no granularity
 
 #define FTHRESHOLD 250
 #define CTHRESHOLD 100
@@ -299,10 +298,7 @@ static int
 	for (ms = 0; ms < ctx->nMSS; ms++) {
 		register Witness *w = &ctx->mss[ms];
 		if (strcmp(name, w->name) == 0) {
-			if (ctx->Root && ms == 0)
-				status = NOMSS;				// Cannot find ROOT
-			else
-				status = ms;
+			status = ms;
 			break;
 		}
 	}
@@ -514,7 +510,18 @@ static void
 	for (ms = 0; ms < ctx->nMSS; ms++) {
 		register Witness *w = &ctx->mss[ms];
 		register Hand *hands = ctx->par[pp].msHands[ms];
+		int isSuppressed;
 
+		/* Skip already suppressed witnesses (if all hands are suppressed) */
+		isSuppressed = YES;
+		for (hh = 0; hh < MAXHAND; hh++) {
+			if (hands[hh].suppressed == NO)
+				isSuppressed = NO;
+		}
+		if (isSuppressed == YES)
+			continue;
+
+		/* Count active variation units */
 		nExtant = 0;
 		var = 0;
 		for (pc = 0; pc < ctx->nPiece; pc++) {
@@ -765,6 +772,9 @@ static void
 		}
 	}
 
+	if (YearGran == 0)
+		return;
+
 	stratum = 0;
 	for (yr = 0; yr < MAXYEAR; yr++) {
 		if (strata[yr])
@@ -798,19 +808,19 @@ static void
 		for (hh = 0; hh < MAXHAND; hh++) {
 			if (hands[hh].suppressed)
 				continue;
-			if (hands[hh].latest == INT_MAX) {
+			if (hands[hh].latest == INT_MAX && ctx->didChron) {
 				fprintf(stderr, "No chron entry for ");
 				fprintf(stderr, "%s",      parName(ctx, pp, w->corrected, hh, w->name));
 				fprintf(stderr, " ~ %s",   parName(ctx, pp, w->corrected, 0, w->Aland));
 				fprintf(stderr, " ~ %s\n", parName(ctx, pp, w->corrected, 0, w->pname));
 			}
-			fprintf(ctx->fpNo, "%-9s %d < ",
+			fprintf(ctx->fpNo, "%-9s %4d < ",
 				parName(ctx, pp, w->corrected, hh, w->pname), hands[hh].stratum);
 
 			for (p2 = 0; p2 < ctx->nParallels; p2++)
 			for (m2 = 0; m2 < ctx->nMSS; m2++) {
 				register Witness *w2 = &ctx->mss[m2];
-				register Hand *hand2 = ctx->par[pp].msHands[m2];
+				register Hand *hand2 = ctx->par[p2].msHands[m2];
 				for (h2 = 0; h2 < MAXHAND; h2++) {
 					if (hand2[h2].suppressed)
 						continue;
@@ -900,6 +910,11 @@ static int
 			strcpy(ctx->par[ctx->parallel].position, token);
 			break;
 		case '*':
+			// Allow ROOT= to be specified with *ROOT
+			if (!ctx->Root && token[1]) {
+				ctx->Root = strdup(token+1);
+				ctx->nMSS++;
+			}
 			ctx->token_lineno = ctx->lineno;
 			while ((token = getToken(ctx)) && *token != ';') {
 				if (*token == '"')
@@ -960,6 +975,14 @@ static int
 				return NO;
 			}
 			break;
+#if 0
+		case '~':
+			// Eat aliases, which could start with control token start
+			getToken(ctx);
+			getToken(ctx);
+			getToken(ctx);
+			break;
+#endif
 		}
 	}
 	if (ctx->nParallels == 0) {
@@ -967,6 +990,12 @@ static int
 		ctx->par[0].name_space = EOS;
 	}
 	ctx->parallel = 0;
+
+	// Turn off ROOT if nul string
+	if (ctx->Root && !ctx->Root[0]) {
+		ctx->Root = 0;
+		ctx->nMSS--;
+	}
 
 	rewind(ctx->fpMss);
 	ctx->lineno = 0;
@@ -1025,6 +1054,9 @@ static int
 	ctx->wvar = 0;
 	ctx->set = 0;
 	ctx->piece = -1;
+
+	ctx->didChron = NO;		// Did not or have not done it yet.
+
 	return YES;
 }
 
@@ -1075,7 +1107,7 @@ static void
 	miss = new(1, Macro);
 	assert( miss );
 
-	miss->level = MAXMACRO-1;
+	miss->level = ctx->macLevel++;
 	miss->inset = new(ctx->nMSS, int);
 	assert( miss->inset );
 	p->pMacros['?'] = miss;
@@ -1311,13 +1343,14 @@ static Status
 	Hand *h;
 	int ms, hh;
 	enum { ADD, SUB, CHK } act;
+	Macro *macro;
 
 	switch (token[1]) {
 	case '+': act = ADD; break;
 	case '-': act = SUB; break;
 	case '?': act = CHK; break;
 	default:
-		fWarn(ctx, "%", "Command must be either %+ or %-:", token);
+		fWarn(ctx, "%", "Command must be either %+ or %- or %?:", token);
 		return FATAL;
 	}
 
@@ -1358,7 +1391,7 @@ static Status
 				break;
 			case CHK:
 				if (h->inLacuna == NO) {
-					fWarn(ctx, "%", "Should be in lacuna:", token);
+					fWarn(ctx, "%", "Not within lacuna:", token);
 					nWarn++;
 				}
 				break;
@@ -1367,8 +1400,47 @@ static Status
 			}
 			break;
 		case '$':
+#if 0
 			fWarn(ctx, "%", "Macros in lacuna specifer unsupported (yet):", token);
 			nWarn++;
+#else
+			macro = getMacro(ctx, token);
+			if (!macro) {
+				fWarn(ctx, "%", "Unknown macro:", token);
+				nWarn++;
+				continue;
+			}
+			for (ms = (ctx->Root) ? 1 : 0; ms < ctx->nMSS; ms++) {
+				if (!macro->inset[ms])
+					continue;
+				h = &ctx->par[ctx->parallel].msHands[ms][0];
+				switch (act) {
+				case ADD:
+					if (h->inLacuna == NO) {
+						fWarn(ctx, "%", "Already out of lacuna:", token);
+						nWarn++;
+					}
+					h->inLacuna = NO;
+					break;
+				case SUB:
+					if (h->inLacuna == YES) {
+						fWarn(ctx, "%", "Already in lacuna:", token);
+						nWarn++;
+					}
+					h->inLacuna = YES;
+					break;
+				case CHK:
+					if (h->inLacuna == NO) {
+						fWarn(ctx, "%", "Not within lacuna:", token);
+						nWarn++;
+					}
+					break;
+				default:
+					assert( act == ADD || act == SUB || act == CHK );
+				}
+			}
+			break;
+#endif
 			break;
 		case ';':
 			return (nWarn == 0) ? OK : WARN;
@@ -1434,9 +1506,7 @@ static Status
 			else {
 				char *end;
 				long wgt = strtol(token+1, &end, 0);
-				if (*end != EOS)
-					wgt = 0; /* Handle conditional inclusion of scribal errors later */
-				else if (wgt == 0)
+				if (wgt == 0)
 					;        /* Explicit zero weights stay zero (should not be used) */
 				else if (ctx->weighByED == 0)
 					wgt = 1; /* Don't weight by edit distance */
@@ -1661,6 +1731,7 @@ static Status
 		}
 	}
 	
+	ctx->didChron = YES;
 	fclose(fpChron);
 	return OK;
 }
@@ -1758,11 +1829,11 @@ static Status
 	if (ms == SUPPRESSED)
 		return OK;
 	if (ms == NOMSS) {
-		fWarn(ctx, "~", "Unknown:\n", token);
+		fWarn(ctx, "~", "Unknown:", token);
 		return FATAL;
 	}
 	if (hh > 0 || ms == BADHAND) {
-		fWarn(ctx, "~", "Cannot have a corrector:\n", token);
+		fWarn(ctx, "~", "Cannot have a corrector:", token);
 		return FATAL;
 	}
 	w = &ctx->mss[ms];
@@ -1774,9 +1845,11 @@ static Status
 		return FATAL;
 	}
 
-	if (w->Aland != w->name)
-		free(w->Aland);
-	w->Aland = strdup(token);
+	if (strcmp(token, "=") != 0) {
+		if (w->Aland != w->name)
+			free(w->Aland);
+		w->Aland = strdup(token);
+	}
 
 	token = getToken(ctx);
 	if (!token) {
@@ -1910,6 +1983,9 @@ static int
 		100, 350, 450, 600, 775, 950, 1100, 1200, 1300, 1400, 1500, 1600, 9999,
 	};
 	int st;
+
+	if (YearGran == 0)
+		return year;
 
 	if (YearGran != -1)
 		return (year + YearGran/2) / YearGran;

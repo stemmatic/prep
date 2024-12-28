@@ -2,7 +2,7 @@
 #define MAXTOKEN 256
 #define MAXMACRO 256
 
-#define MAXHAND 4
+#define MAXHAND 8
 #define MAXPARS 3
 
 #define dimof(a) (sizeof a/sizeof a[0])
@@ -84,6 +84,8 @@ struct context {
 	int macLevel;				// Macro level
 
 	char *Root;					// Has root? If so, its name.
+
+	int didChron;				// Did the chron file.
 };
 
 #define NO  0
