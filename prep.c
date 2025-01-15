@@ -15,10 +15,10 @@
 	Environmental controls:
 		YEARGRAN  - Granularity for years.  Default or (0) is
 		            no granularity. (-1) is tuned for the N.T.
-		FRAG      - Threshold number of non-constant variants
-					for including fragmentary witnesses.  (250)
+		FRAG      - Threshold level of non-constant variants
+					for including fragmentary witnesses.  (50%)
 		CORR      - Threshold number of new non-constant variants
-					for including corrected witnesses.  (100)
+					for including corrected witnesses.  (10%)
 		YEAR      - Cut off year for witnesses.
 		NOSING    - No singular readings in matrix.
 		ROOT      - Define an explicit root/ancestor (e.g. UBS).
@@ -78,8 +78,8 @@
 #define LITGRAN (-1)			// Literary Granularity, use table
 static int YearGran = 0;		// Default to no granularity
 
-#define FTHRESHOLD 250
-#define CTHRESHOLD 100
+#define FTHRESHOLD "50%"
+#define CTHRESHOLD "10%"
 #define WEIGHBYED 6
 
 typedef enum { OK, WARN, END, FATAL, } Status;
@@ -487,6 +487,25 @@ static void
 	}
 }
 
+int
+	threshold(char *threshenv, int wvar, char *defThresh)
+{
+	int thresh = wvar;
+
+	if (!threshenv)
+		threshenv = (defThresh) ? defThresh : "100%";
+
+	thresh = atoi(threshenv);
+	if (strchr(threshenv, '%'))
+		thresh = thresh * wvar / 100 + 1;
+	if (thresh < 0)
+		thresh = 0;
+	if (thresh > wvar)
+		thresh = wvar;
+
+	return thresh;
+}
+
 static void
 	suppressTx(Context *ctx)
 {
@@ -495,17 +514,13 @@ static void
 	int pp;
 	int var;
 	char * r;
-	char *threshenv, *yearenv;
+	char *yearenv;
 	int year, lastHand, nHands;
 
-	fThresh = (threshenv = getenv("FRAG")) ? atoi(threshenv)
-//		: (ctx->nVar > 2*FTHRESHOLD) ? FTHRESHOLD
-		: ctx->wvar/2 + 1;
-	cThresh = (threshenv = getenv("CORR")) ? atoi(threshenv)
-		: (ctx->nVar > 2*CTHRESHOLD) ? CTHRESHOLD 
-		: ctx->wvar/10 + 1;
-	fprintf(stderr, "Thresholds: frag=%d, corr=%d; adjustments:",
-		fThresh, cThresh);
+	fThresh = threshold(getenv("FRAG"), ctx->wvar, FTHRESHOLD);
+	cThresh = threshold(getenv("CORR"), ctx->wvar, CTHRESHOLD);
+	fprintf(stderr, "Thresholds: frag=%d, corr=%d; adjustments:", fThresh, cThresh);
+
 	for (pp = 0; pp < ctx->nParallels; pp++)
 	for (ms = 0; ms < ctx->nMSS; ms++) {
 		register Witness *w = &ctx->mss[ms];
@@ -811,8 +826,8 @@ static void
 			if (hands[hh].latest == INT_MAX && ctx->didChron) {
 				fprintf(stderr, "No chron entry for ");
 				fprintf(stderr, "%s",      parName(ctx, pp, w->corrected, hh, w->name));
-				fprintf(stderr, " ~ %s",   parName(ctx, pp, w->corrected, 0, w->Aland));
-				fprintf(stderr, " ~ %s\n", parName(ctx, pp, w->corrected, 0, w->pname));
+				fprintf(stderr, " ~ %s",   parName(ctx, pp, w->corrected, hh, w->Aland));
+				fprintf(stderr, " ~ %s\n", parName(ctx, pp, w->corrected, hh, w->pname));
 			}
 			fprintf(ctx->fpNo, "%-9s %4d < ",
 				parName(ctx, pp, w->corrected, hh, w->pname), hands[hh].stratum);
@@ -860,7 +875,11 @@ static int
 	char *base;
 
 	if (argc < 2) {
-		fprintf(stderr, "Usage: %s ms-coll {witness}*\n", argv[0]);
+		fprintf(stderr, "Usage: %s ms-coll {witnesses}*\n", argv[0]);
+		fprintf(stderr, "\tFRAG={num|pct%%}  Threshold level for fragmentary witnesses (default: %s)\n", FTHRESHOLD);
+		fprintf(stderr, "\tCORR={num|pct%%}  Threshold level of corrections for inclusion (default: %s)\n", CTHRESHOLD);
+		fprintf(stderr, "\tROOT={string}    Name of root witness (default: no root)\n");
+		fprintf(stderr, "\tYEAR={num}       Year cutoff for including witnesses (default: no year suppression)\n");
 		return NO;
 	}
 
