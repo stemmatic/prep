@@ -87,4 +87,4 @@ Customize Prep's behavior with environment variables (set via export in bash or 
 ## License
 This project is licensed under the MIT License. See the LICENSE file for details.
 ## Acknowledgements
-* The prep program is designed to work with the **stemma* program for stemmatic analysis.
+* The prep program is designed to work with the **stemma** program for stemmatic analysis.
