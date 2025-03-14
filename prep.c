@@ -22,6 +22,7 @@
 		YEAR      - Cut off year for witnesses.
 		NOSING    - No singular readings in matrix.
 		ROOT      - Define an explicit root/ancestor (e.g. UBS).
+		YRLINK    - Year cutoff for allowing direct links.
 
 	Special macros:
 		$*		  - All witnesses
@@ -813,6 +814,11 @@ static void
 	int pp, p2;
 	int ms, m2;
 	int hh, h2;
+	char *yl = getenv("YRLINK");
+	int yrLink = (yl) ? atoi(yl) : 0;
+
+	if (yrLink > 0)
+		fprintf(stderr, "Year link: %d\n", yrLink);
 
 	// Output
 	stratify(ctx);
@@ -843,6 +849,9 @@ static void
 						fprintf(ctx->fpNo, "%s ",
 							parName(ctx, p2, w2->corrected, h2, w2->pname));
 					} else if (w == w2 && pp == p2 && hh >= h2) {
+						fprintf(ctx->fpNo, "%s ",
+							parName(ctx, p2, w2->corrected, h2, w2->pname));
+					} else if (hands[hh].average <= yrLink && hand2[h2].average <= yrLink) {
 						fprintf(ctx->fpNo, "%s ",
 							parName(ctx, p2, w2->corrected, h2, w2->pname));
 					}
