@@ -81,6 +81,10 @@ Customize Prep's behavior with environment variables (set via export in bash or 
   * Defines an explicit root or ancestor (e.g., the archetype or a standard text).
   * Default: No root.
   * Example: `export ROOT=UBS`.
+* `KEEPSAME`:
+  * Turns off the identical witness check.
+  * Default: suppress identical witnessesd
+  * Example: `export KEEPSAME`
 ## Special Macros
 *  `$*`: Represents all active witnesses.
 *  `$?`: Represents witnesses with unknown readings (e.g., lacunae or missing data).
