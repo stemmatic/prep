@@ -68,6 +68,7 @@
 	default - name of witness/reading
 */
 
+// Results of findMSS
 #define NOMSS (-1)
 #define SUPPRESSED (-2)
 #define BADHAND (-3)
@@ -143,8 +144,7 @@ int
 	while ((token = getToken(ctx))) {
 		switch (*token) {
 		default:
-			fWarn(ctx, "?", "Unknown token:", token);
-			status = WARN;
+			// Explicit lemma, just ignore
 			break;
 		case '!':		// User requested end
 			status = END;
@@ -362,7 +362,7 @@ static void
 	col = fprintf(stderr, "%4lu: %s (%4lu)", ctx->lineno, cmd, ctx->token_lineno);
 	do { col += fprintf(stderr, " "); } while (col < 6);
 
-	col += fprintf(stderr, "%s", msg);
+	col += fprintf(stderr, "%-12s", msg);
 	if (*arg)
 		col += fprintf(stderr, " %s", arg);
 	do { col += fprintf(stderr, " "); } while (col < 31);
@@ -695,6 +695,11 @@ static void
 
 	fprintf(stderr, "Checking identical witnesses:");
 
+	if (getenv("KEEPSAME")) {
+		fprintf(stderr, " (turned off)\n");
+		return;
+	}
+
 	for (pp = 0; pp < ctx->nParallels; pp++)
 	for (ms = 0; ms < ctx->nMSS; ms++) {
 		register Witness *w = &ctx->mss[ms];
@@ -815,7 +820,7 @@ static void
 	int ms, m2;
 	int hh, h2;
 	char *yl = getenv("YRLINK");
-	int yrLink = (yl) ? atoi(yl) : 0;
+	int yrLink = (yl) ? atoi(yl) : -1;
 
 	if (yrLink > 0)
 		fprintf(stderr, "Year link: %d\n", yrLink);
@@ -838,6 +843,9 @@ static void
 			fprintf(ctx->fpNo, "%-9s %4d < ",
 				parName(ctx, pp, w->corrected, hh, w->pname), hands[hh].stratum);
 
+			// Let ROOT source any witness except itself.
+			int isRoot = (ctx->Root && pp == 0 && ms == 0 && hh == 0);
+
 			for (p2 = 0; p2 < ctx->nParallels; p2++)
 			for (m2 = 0; m2 < ctx->nMSS; m2++) {
 				register Witness *w2 = &ctx->mss[m2];
@@ -851,12 +859,13 @@ static void
 					} else if (w == w2 && pp == p2 && hh >= h2) {
 						fprintf(ctx->fpNo, "%s ",
 							parName(ctx, p2, w2->corrected, h2, w2->pname));
-					} else if (hands[hh].average <= yrLink && hand2[h2].average <= yrLink) {
+					} else if (!isRoot && hands[hh].average <= yrLink && hand2[h2].average <= yrLink) {
 						fprintf(ctx->fpNo, "%s ",
 							parName(ctx, p2, w2->corrected, h2, w2->pname));
 					}
 				}
 			}
+
 			fprintf(ctx->fpNo, ">\n");
 		}
 	}
@@ -1973,16 +1982,51 @@ static void
 	writeVr(Context *ctx)
 {
 	char *token;
+	int lemma = NO;
 
 	rewind(ctx->fpMss);
+	ctx->lineno = 0;
+	ctx->inc_line_p = YES;
 	ctx->var = 0;
 	ctx->wvar = 0;
+
+	int lineno = ctx->lineno;
 	while ((token = getToken(ctx)) && *token != '!') {
 		switch (*token) {
 		default:
+			if (lemma && lineno < ctx->lineno) {
+				fprintf(ctx->fpVr, "\n");
+				lemma = NO;
+			}
+			if (!lemma)
+				fprintf(ctx->fpVr, "\n>     ");
+			else
+				fprintf(ctx->fpVr, " ");
+			fprintf(ctx->fpVr, "%s", token);
+			lemma = YES;
+			lineno = ctx->lineno;
+			break;
+		case '[':
+			if (lemma) {
+				fprintf(ctx->fpVr, "\n");
+				lemma = NO;
+			}
+			vrReadings(ctx);
 			break;
 		case '@':
+			if (lemma) {
+				fprintf(ctx->fpVr, "\n");
+				lemma = NO;
+			}
 			vrVerse(ctx);
+			break;
+		case '~':
+			getToken(ctx);
+			getToken(ctx);
+			getToken(ctx);
+			break;
+		case '^':
+			getToken(ctx);
 			break;
 		case '*':
 		case '=':
@@ -1994,11 +2038,12 @@ static void
 		case '<':
 			EAT(ctx, token, '>');
 			break;
+		case '|':
+		case '>':
+			fWarn(ctx, "vr", "Non-lemmatic token:", token);
+			break;
 		case '"':
 			EAT(ctx, token, '"');
-			break;
-		case '[':
-			vrReadings(ctx);
 			break;
 		}
 	}
